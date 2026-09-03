@@ -1,0 +1,44 @@
+# Build output and temporary verification files
+/out/
+/dist/
+/target/
+*.class
+*.jar
+
+# Downloaded KataGo runtime and model; keep the application configuration
+/engine/katago/*
+!/engine/katago/yiyan-gtp.cfg
+*.bin.gz
+
+# Credentials and machine-local configuration
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+local.properties
+*.local.properties
+*.local.json
+*.local.xml
+secrets/
+credentials/
+settings.xml
+
+# User game data and logs
+games/
+logs/
+*.log
+*.jsonl
+*.bak
+
+# IDE and agent files
+.idea/
+.vscode/
+.codex/
+.agents/
+*.iml
+.DS_Store
+Thumbs.db

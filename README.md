@@ -1,0 +1,167 @@
+# 弈言 · Yiyan Go
+
+一个用 **Java 17 + Swing** 编写的桌面围棋应用。暖米白与陶土色界面，支持本地陪练、DeepSeek 对弈、简短落子说明、棋谱复盘和 KataGo 终局判定。
+
+当前交付版本为 **Windows 桌面版**；Android 移植尚未实现。
+
+## 功能
+
+- **围棋规则**：9 / 13 / 19 路棋盘，吃子、禁自杀、简单劫、贴目与中国面积计分。
+- **对局操作**：选择执黑或执白、悔棋、停一手、认输、新开棋局。
+- **AI 对弈**：本地启发式陪练，或连接自己的 DeepSeek API。
+- **落子说明**：展示提子、气数、联络及简要落子意图。
+- **终局判定**：KataGo 判断死子，结合面积计数复核胜负。
+- **棋谱与复盘**：每手自动保存、历史列表、逐手回看、SGF 导出。
+- **错误恢复**：有限重试、可选本地接续、脱敏运行日志。
+
+| 组件 | 职责 | 是否需要联网 |
+| --- | --- | --- |
+| 本地陪练 | 通过规则与启发式策略选择落点 | 否 |
+| DeepSeek | 选择落点并返回简短说明 | 是，需要自行提供 API Key |
+| KataGo | 双方连续停手后的死子判断与终局复核 | 安装时下载，判定时本地运行 |
+
+## 快速开始
+
+### 1. 准备环境
+
+- Windows 10 / 11，JDK 17 或更高版本；确认 `java -version` 可以运行。
+- 使用 Git 克隆，或在 GitHub 页面选择 **Code → Download ZIP** 并解压。
+- 首次构建需要联网下载 Maven 和依赖。仓库带有 Maven Wrapper，无需另装 Maven。
+- 构建自带运行环境的 EXE 时，需要 JDK 中的 `jpackage`。
+
+```powershell
+git clone https://github.com/cwz099/yiyan-go.git
+cd yiyan-go
+.\run.ps1
+```
+
+也可以直接构建并运行 JAR：
+
+```powershell
+.\mvnw.cmd --no-transfer-progress package
+java -jar .\target\yiyan-go.jar
+```
+
+没有设置 DeepSeek 密钥时可使用本地陪练。未安装 KataGo 时，可使用手动计分。
+
+### 2. 连接 DeepSeek（可选）
+
+1. 点击应用右上角的对手按钮。
+2. 在“API 密钥”中填写自己的密钥。
+3. 保留默认 API 地址，或填写兼容的 HTTPS 接口地址。
+4. 选择模型并点击“连接 DeepSeek”；实际请求会在 AI 回合发出。
+
+当前默认模型为 `deepseek-v4-flash`，也可以在界面中修改，例如 `deepseek-v4-pro`。实际可用模型与权限以自己的服务账号为准。
+
+API Key 仅保存在当前应用进程的内存中。也支持启动时读取 `DEEPSEEK_API_KEY` 环境变量；可选变量 `DEEPSEEK_ENDPOINT`、`DEEPSEEK_MODEL` 用于覆盖地址与模型。
+
+**仓库不提供任何 API Key。不要把真实密钥写入源码、README 或提交文件。** `.gitignore` 已排除常见密钥文件、本机配置、日志、棋谱与构建产物。
+
+### 3. 安装 KataGo（可选）
+
+在项目根目录运行：
+
+```powershell
+.\install-katago.ps1
+```
+
+脚本从官方来源下载 KataGo 1.18.1 Windows x64 Eigen CPU 版本和 b18c384 模型，并校验程序压缩包与模型的 SHA-256。模型下载量约 98 MB。
+
+安装完成后重新启动应用。双方连续停手时，程序在后台判断死子、核算面积，并与 KataGo 的结果交叉验证；一致后保存胜负，存在分歧时保留待结算状态，可继续收官或手动核对。
+
+KataGo 只负责终局判定，DeepSeek 仍自主选择落点。引擎来源和许可证说明见 [engine/README.md](engine/README.md)。
+
+## 使用说明
+
+| 操作 | 使用方式 |
+| --- | --- |
+| 开始对局 | 在“对局设置”中选择棋盘、执子颜色和贴目，应用设置后开局 |
+| 落子 | 点击棋盘交叉点；也可用方向键与 Enter |
+| 查看说明 | 在右侧“落子说明”面板查看 AI 的每手说明 |
+| 调整对局 | 使用棋盘下方的悔棋、停一手和认输按钮 |
+| AI 请求失败 | 点击“重试 AI”，或更换对手；可在设置中允许本地自动接续 |
+| 查看胜负 | 双方连续停手后进行终局判定，点击计分入口查看明细 |
+| 历史复盘 | 打开“复盘与对局记录”，选中棋局后逐手回看或导出 SGF |
+| 查看错误 | 打开“运行与网络日志”，查看错误类别、耗时和重试记录 |
+
+### 为什么会显示“AI 暂停落子”？
+
+程序会校验 AI 返回的坐标、合法性以及基础落子风险。重复占点、填己方眼位、无提子收益却落子后只剩一口气等情况，会要求 AI 重新选择。单手最多尝试 3 次，仍未通过时按设置暂停或由本地陪练接续。
+
+暂停提示会尽量给出具体坐标和原因；失败请求不会推进手数。安全筛选是启发式检查，并非完整的围棋战术判断，可能拒绝部分有策略意图的落子。
+
+### 数据保存位置
+
+Windows 用户数据保存在 `%LOCALAPPDATA%\Yiyan`，与程序安装目录分开：
+
+```text
+settings.xml             对局偏好，不含 API Key
+games/                   对局快照、逐手事件和备份
+logs/                    脱敏运行与网络日志
+```
+
+日志不记录 API Key、Authorization、完整请求或响应正文。需要独立的数据目录时，可在启动参数中设置 `-Dyiyan.dataDir=目录`。
+
+当前支持保存和复盘，**尚不支持恢复未完成棋局继续对弈，也不支持 SGF 导入**。关闭窗口前请留意这一限制。
+
+## 生成 Windows 免安装版
+
+```powershell
+.\install-katago.ps1
+.\package-windows.ps1
+```
+
+生成位置：
+
+```text
+dist/windows/弈言/弈言.exe
+```
+
+将整个 `弈言` 文件夹复制到目标电脑后即可运行，不需要额外安装 Java。请保留文件夹内的运行环境和引擎文件；只复制 EXE 无法运行。
+
+打包脚本会保留上一版目录。如果原目录被占用，新版会写入独立的带时间戳目录，以脚本输出路径为准。仓库中的源码不包含预编译 EXE、Java 运行环境或 KataGo 模型，需要自行构建和下载。
+
+## 项目结构
+
+```text
+yiyan-go/
+├── pom.xml                         Java 17、JUnit 与 Maven 构建配置
+├── mvnw / mvnw.cmd                 Maven Wrapper 启动脚本
+├── .mvn/wrapper/                   Maven 版本、下载地址与校验值
+├── run.ps1                         构建并启动桌面应用
+├── test.ps1                        运行测试
+├── build.ps1                       构建并输出 JAR
+├── package-windows.ps1             打包自带运行环境的 Windows 应用
+├── install-katago.ps1              下载和校验 KataGo 程序与模型
+├── src/main/java/com/yiyan/go/
+│   ├── App.java                    应用启动入口
+│   ├── game/                       棋盘、规则、贴目与面积计分
+│   ├── ai/                         对手接口、本地策略、DeepSeek 接入与落子校验
+│   ├── engine/                     KataGo 进程、GTP 协议、终局结果核验
+│   ├── ui/                         Swing 界面、棋盘绘制、对话卡片与复盘窗口
+│   ├── recording/                  棋谱保存、读取、合法重放及 SGF 导出
+│   └── diagnostics/                用户数据路径、脱敏日志与 JSON 编解码
+├── src/test/java/                  规则、网络、记录、引擎与界面流程测试
+├── engine/
+│   ├── README.md                   引擎来源、安装与许可证说明
+│   └── katago/yiyan-gtp.cfg         项目的终局引擎配置
+├── docs/katago-acceptance.md        KataGo 接入验证记录
+├── tools/install-maven.ps1         可选的独立 Maven 安装工具
+├── target/                        构建和临时验证输出，不提交
+└── dist/                          分发包，不提交
+```
+
+落子流程：`界面操作 → 对手选择 → 规则/落子校验 → 更新棋盘 → 保存棋谱 → 展示说明`。
+
+终局流程：`双方停手 → KataGo 判死子 → 面积计数复核 → 保存结果 / 等待人工核对`。
+
+## 开发与验证
+
+```powershell
+.\mvnw.cmd --no-transfer-progress test
+.\mvnw.cmd --no-transfer-progress package
+```
+
+依赖已下载时可以加 `--offline`。最近一次 Windows 本地验证：**111 项测试通过，0 失败、0 错误**；覆盖规则、有限纠错、网络超时与取消、记录保存、GTP 交互和界面流程。部分 Swing 测试需要图形环境。
+
+目前使用基础中国面积规则和简单劫，并未实现完整的赛事裁判规则。跨平台 JAR 和 Android 版本尚未完成独立验收；内置引擎安装与 EXE 打包脚本面向 Windows x64。
