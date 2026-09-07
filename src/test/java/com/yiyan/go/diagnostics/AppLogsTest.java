@@ -1,5 +1,6 @@
 package com.yiyan.go.diagnostics;
 
+import com.yiyan.go.engine.EngineException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
@@ -68,8 +69,30 @@ class AppLogsTest {
         }
     }
 
+    @Test void rankedEngineEvidenceSurvivesTheLogAllowlist() throws Exception {
+        String previous = System.getProperty("yiyan.dataDir");
+        try {
+            System.setProperty("yiyan.dataDir", temporary.toString());
+            AppLogs.event("engine", "ranked_move_completed", Map.of(
+                    "difficulty", "九段", "maxVisits", 4096, "maxTimeMs", 10_000,
+                    "temperature", 0.0, "historyMoves", 42, "syncMode", "incremental",
+                    "engineSessionId", "session-1", "opponentMode", "katago"));
+            String content = Files.readString(temporary.resolve("logs/application.jsonl"));
+            assertTrue(content.contains("\"difficulty\":\"九段\""));
+            assertTrue(content.contains("\"maxVisits\":4096"));
+            assertTrue(content.contains("\"syncMode\":\"incremental\""));
+            assertTrue(content.contains("\"engineSessionId\":\"session-1\""));
+        } finally {
+            if (previous == null) System.clearProperty("yiyan.dataDir");
+            else System.setProperty("yiyan.dataDir", previous);
+        }
+    }
+
     @Test void errorMessageNeverIncludesRemoteExceptionText() {
         assertEquals("API 请求超时", AppLogs.safeError(new java.net.http.HttpTimeoutException("private-server-text")));
         assertFalse(AppLogs.safeError(new java.io.IOException("secret-raw-response")).contains("secret"));
+        assertEquals("engine_failure", AppLogs.errorCode(new EngineException("KataGo 已退出")));
+        assertEquals("KataGo 已退出", AppLogs.safeError(new EngineException("KataGo 已退出")));
+        assertEquals("engine_timeout", AppLogs.errorCode(new EngineException("KataGo 计算超时，请重试")));
     }
 }

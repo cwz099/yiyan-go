@@ -32,9 +32,9 @@ public final class LogsDialog extends JDialog {
         JPanel heading = new JPanel();
         heading.setOpaque(false);
         heading.setLayout(new BoxLayout(heading, BoxLayout.Y_AXIS));
-        JLabel title = new JLabel("让每一次请求都有迹可循");
+        JLabel title = new JLabel("让每一次对局与请求都有迹可循");
         title.setFont(Theme.display(23));
-        JLabel note = new JLabel("仅显示最近 200 KB；包含请求状态与错误类别，不保存密钥或原始响应正文。");
+        JLabel note = new JLabel("仅显示最近 200 KB；包含对局、KataGo 引擎和网络请求状态，不保存密钥或原始响应正文。");
         note.setFont(Theme.body(12));
         note.setForeground(Theme.TEXT_SECONDARY);
         heading.add(title);

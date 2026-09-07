@@ -54,6 +54,7 @@ import java.awt.event.WindowEvent;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.io.IOException;
@@ -73,7 +74,7 @@ public final class MainFrame extends JFrame {
     private final Deque<BoardState> undoStack = new ArrayDeque<>();
     private final List<Narrative> narratives = new ArrayList<>();
     private final LocalGoOpponent localOpponent = new LocalGoOpponent();
-    private GoOpponent opponent = settings.rankedMode() ? new KataGoOpponent(settings.difficulty()) : localOpponent;
+    private GoOpponent opponent = localOpponent;
     private DeepSeekConfig deepSeekConfig;
     private String lastAiStatus = settings.rankedMode() ? "本地引擎就绪" : "离线";
     private String resultSummary = "";
@@ -132,7 +133,10 @@ public final class MainFrame extends JFrame {
 
         setContentPane(createRoot());
         installActions();
-        recorder = GameRecorder.start(state, settings.humanColor(), opponent.displayName());
+        String initialProvider = settings.rankedMode() ? settings.difficulty().opponentName() : localOpponent.displayName();
+        recorder = GameRecorder.start(state, settings.humanColor(), initialProvider);
+        if (settings.rankedMode()) opponent = new KataGoOpponent(settings.difficulty(), recorder.id());
+        logGameStarted();
         resetNarratives();
         refreshAll();
         reportStorageFailure();
@@ -418,8 +422,12 @@ public final class MainFrame extends JFrame {
         final List<Move> requestedHistory = recorder.moveHistory();
         final GoOpponent turnOpponent = fallback ? localOpponent : opponent;
         final long started = System.nanoTime();
-        AppLogs.event("game", "ai_turn_started", Map.of("gameId", recorder.id(),
-                "moveNumber", state.moveNumber() + 1, "source", lastAiStatus));
+        Map<String, Object> turnFields = new LinkedHashMap<>();
+        turnFields.put("gameId", recorder.id());
+        turnFields.put("moveNumber", state.moveNumber() + 1);
+        turnFields.put("source", lastAiStatus);
+        addRankedFields(turnFields);
+        AppLogs.event("game", "ai_turn_started", turnFields);
         aiWorker = new SwingWorker<>() {
             @Override
             protected AiDecision doInBackground() throws Exception {
@@ -468,9 +476,17 @@ public final class MainFrame extends JFrame {
         String explanation = AppLogs.redact(decision.motivation());
         recorder.record(state, result, source, explanation, elapsedMs);
         humanTurnStarted = System.nanoTime();
-        AppLogs.event("game", "ai_move_applied", Map.of("gameId", recorder.id(),
-                "moveNumber", move.number(), "source", source, "action", move.pass() ? "PASS" : "PLAY",
-                "durationMs", elapsedMs, "requestId", decision.requestId(), "attempts", decision.attempts()));
+        Map<String, Object> appliedFields = new LinkedHashMap<>();
+        appliedFields.put("gameId", recorder.id());
+        appliedFields.put("moveNumber", move.number());
+        appliedFields.put("source", source);
+        appliedFields.put("action", move.pass() ? "PASS" : "PLAY");
+        appliedFields.put("coordinate", move.coordinate(state.size()));
+        appliedFields.put("durationMs", elapsedMs);
+        appliedFields.put("requestId", decision.requestId());
+        appliedFields.put("attempts", decision.attempts());
+        addRankedFields(appliedFields);
+        AppLogs.event("game", "ai_move_applied", appliedFields);
         narratives.add(new Narrative(move.number(), MessageKind.AI,
                 move.stone().chineseName() + " · 第 " + move.number() + " 手 · "
                         + move.coordinate(state.size()) + (fallback ? " · 本地接续" : ""), explanation));
@@ -484,9 +500,14 @@ public final class MainFrame extends JFrame {
         String reason = AppLogs.safeError(error);
         lastAiStatus = "最近请求失败";
         recorder.event("ai_failure", reason, state);
-        AppLogs.event("game", "ai_turn_failed", Map.of("gameId", recorder.id(),
-                "moveNumber", state.moveNumber() + 1, "reason", reason,
-                "errorClass", error.getClass().getSimpleName()));
+        Map<String, Object> failedFields = new LinkedHashMap<>();
+        failedFields.put("gameId", recorder.id());
+        failedFields.put("moveNumber", state.moveNumber() + 1);
+        failedFields.put("reason", reason);
+        failedFields.put("errorCode", AppLogs.errorCode(error));
+        failedFields.put("errorClass", AppLogs.unwrap(error).getClass().getSimpleName());
+        addRankedFields(failedFields);
+        AppLogs.event("game", "ai_turn_failed", failedFields);
         if (!fallback && opponent != localOpponent && !(opponent instanceof KataGoOpponent) && settings.autoFallback()) {
             narratives.add(new Narrative(state.moveNumber(), MessageKind.WARNING,
                     "本手改由本地接续", reason + "。本手由本地陪练完成；下一回合仍会尝试 DeepSeek。"));
@@ -550,11 +571,12 @@ public final class MainFrame extends JFrame {
         String providerName = settings.rankedMode() ? settings.difficulty().opponentName()
                 : deepSeekConfig == null ? localOpponent.displayName() : "DeepSeek · " + AppLogs.redact(deepSeekConfig.model());
         recorder = GameRecorder.start(state, settings.humanColor(), providerName);
-        opponent = settings.rankedMode() ? new KataGoOpponent(settings.difficulty())
+        opponent = settings.rankedMode() ? new KataGoOpponent(settings.difficulty(), recorder.id())
                 : deepSeekConfig == null ? localOpponent : new DeepSeekOpponent(deepSeekConfig, recorder.id());
         lastAiStatus = opponent instanceof KataGoOpponent ? "本地引擎就绪"
                 : opponent == localOpponent ? "离线" : "待请求";
         resetNarratives();
+        logGameStarted();
         showHint("新棋局已经摆好。你执" + settings.humanColor().chineseName() + "。", Theme.SUCCESS);
         refreshAll();
         startAiTurn(false);
@@ -812,6 +834,9 @@ public final class MainFrame extends JFrame {
                     + "DeepSeek。"));
         }
         recorder.opponentChanged(AppLogs.redact(opponent.displayName()), state);
+        AppLogs.event("game", "opponent_changed", Map.of("gameId", recorder.id(),
+                "source", AppLogs.redact(opponent.displayName()), "opponentMode",
+                opponent == localOpponent ? "local" : "deepseek"));
         refreshAll();
         rebuildMessages();
         startAiTurn(false);
@@ -823,6 +848,27 @@ public final class MainFrame extends JFrame {
 
     private long humanElapsedMs() {
         return Math.max(0, (System.nanoTime() - humanTurnStarted) / 1_000_000);
+    }
+
+    private void logGameStarted() {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        fields.put("gameId", recorder.id());
+        fields.put("boardSize", settings.boardSize());
+        fields.put("komi", settings.komi());
+        fields.put("playerColor", settings.humanColor().name());
+        fields.put("source", opponent.displayName());
+        fields.put("opponentMode", opponent instanceof KataGoOpponent ? "katago"
+                : opponent == localOpponent ? "local" : "deepseek");
+        addRankedFields(fields);
+        AppLogs.event("game", "started", fields);
+    }
+
+    private void addRankedFields(Map<String, Object> fields) {
+        if (!(opponent instanceof KataGoOpponent)) return;
+        fields.put("difficulty", settings.difficulty().toString());
+        fields.put("maxVisits", settings.difficulty().visits());
+        fields.put("maxTimeMs", Math.round(settings.difficulty().seconds() * 1000));
+        fields.put("temperature", settings.difficulty().temperature());
     }
 
     private void refreshAll() {

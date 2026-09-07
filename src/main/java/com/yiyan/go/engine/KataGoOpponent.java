@@ -3,35 +3,51 @@ package com.yiyan.go.engine;
 import com.yiyan.go.ai.AiDecision;
 import com.yiyan.go.ai.GoOpponent;
 import com.yiyan.go.ai.MovePolicy;
+import com.yiyan.go.diagnostics.AppLogs;
 import com.yiyan.go.game.*;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /** One lazily loaded engine per game; the recorded history is authoritative after undo. */
 public final class KataGoOpponent implements GoOpponent {
     @FunctionalInterface interface ProcessFactory { ProcessBuilder create() throws IOException; }
     private final GoDifficulty difficulty;
     private final ProcessFactory factory;
+    private final String gameId;
     private volatile GtpSession session;
     private volatile boolean closed;
+    private String engineSessionId = "";
     private List<Move> synchronizedHistory = List.of();
     private int size;
     private double komi;
 
     public KataGoOpponent(GoDifficulty difficulty) {
-        this(difficulty, () -> process(KataGoConfig.discover(), difficulty));
+        this(difficulty, () -> process(KataGoConfig.discover(), difficulty), "");
+    }
+
+    public KataGoOpponent(GoDifficulty difficulty, String gameId) {
+        this(difficulty, () -> process(KataGoConfig.discover(), difficulty), gameId);
     }
 
     public KataGoOpponent(KataGoConfig config, GoDifficulty difficulty) {
-        this(difficulty, () -> process(config, difficulty));
+        this(difficulty, () -> process(config, difficulty), "");
     }
 
     KataGoOpponent(GoDifficulty difficulty, ProcessFactory factory) {
+        this(difficulty, factory, "");
+    }
+
+    KataGoOpponent(GoDifficulty difficulty, ProcessFactory factory, String gameId) {
         this.difficulty = Objects.requireNonNull(difficulty);
         this.factory = Objects.requireNonNull(factory);
+        this.gameId = gameId == null ? "" : gameId;
     }
 
     private static ProcessBuilder process(KataGoConfig config, GoDifficulty level) throws IOException {
@@ -58,19 +74,29 @@ public final class KataGoOpponent implements GoOpponent {
     @Override public synchronized AiDecision chooseMove(BoardState position, List<Move> history) throws Exception {
         BoardState board = position.copy();
         List<Move> moves = List.copyOf(history);
-        validateHistory(board, moves);
-        if (closed || Thread.currentThread().isInterrupted()) throw new InterruptedException();
+        long started = System.nanoTime();
         try {
+            validateHistory(board, moves);
+            if (closed || Thread.currentThread().isInterrupted()) throw new InterruptedException();
             GtpSession active = session;
             if (active == null) {
-                active = new GtpSession(factory.create(), Duration.ofSeconds(60));
+                engineSessionId = UUID.randomUUID().toString();
+                try {
+                    active = new GtpSession(factory.create(), Duration.ofSeconds(60));
+                } catch (IOException exception) {
+                    throw new EngineException("KataGo 无法启动，请检查引擎和模型文件", exception);
+                }
                 session = active;
                 if (closed) throw new InterruptedException();
                 if (!active.command("name").equalsIgnoreCase("KataGo")) throw new EngineException("引擎身份不匹配");
                 size = 0;
+                AppLogs.event("engine", "ranked_engine_started", diagnosticFields(board, moves));
             }
             active.resetBudget(Duration.ofSeconds(60));
-            synchronize(active, board, moves);
+            String syncMode = synchronize(active, board, moves);
+            Map<String, Object> startedFields = diagnosticFields(board, moves);
+            startedFields.put("syncMode", syncMode);
+            AppLogs.event("engine", "ranked_move_started", startedFields);
             String coordinate = active.command("genmove " + color(board.turn())).trim();
             AiDecision decision = parseDecision(board, coordinate);
             if (closed || Thread.currentThread().isInterrupted()) throw new InterruptedException();
@@ -78,18 +104,32 @@ public final class KataGoOpponent implements GoOpponent {
             List<Move> next = new ArrayList<>(moves);
             next.add(result.move());
             synchronizedHistory = List.copyOf(next);
+            Map<String, Object> completed = new LinkedHashMap<>(startedFields);
+            completed.put("syncMode", syncMode);
+            completed.put("action", decision.pass() ? "pass" : "play");
+            completed.put("coordinate", decision.pass() ? "PASS" : decision.point().coordinate(board.size()));
+            completed.put("historyMoves", moves.size() + 1);
+            completed.put("durationMs", elapsedMs(started));
+            AppLogs.event("engine", "ranked_move_completed", completed);
             return decision;
         } catch (Exception exception) {
+            Map<String, Object> failed = diagnosticFields(board, moves);
+            failed.put("durationMs", elapsedMs(started));
+            failed.put("errorCode", AppLogs.errorCode(exception));
+            failed.put("errorClass", AppLogs.unwrap(exception).getClass().getSimpleName());
+            failed.put("reason", AppLogs.safeError(exception));
+            AppLogs.event("engine", "ranked_move_failed", failed);
             // A failed/cancelled genmove may already have changed the engine. Recreate before retrying.
-            discardSession();
+            discardSession("failed");
             throw exception;
         }
     }
 
-    private void synchronize(GtpSession active, BoardState board, List<Move> history) throws Exception {
+    private String synchronize(GtpSession active, BoardState board, List<Move> history) throws Exception {
         boolean prefix = size == board.size() && Double.compare(komi, board.komi()) == 0
                 && history.size() >= synchronizedHistory.size()
                 && history.subList(0, synchronizedHistory.size()).equals(synchronizedHistory);
+        int previousMoves = synchronizedHistory.size();
         if (!prefix) {
             active.command("boardsize " + board.size());
             active.command("clear_board");
@@ -104,6 +144,8 @@ public final class KataGoOpponent implements GoOpponent {
             active.command("play " + color(move.stone()) + " " + (move.pass() ? "pass" : move.coordinate(board.size())));
         }
         synchronizedHistory = history;
+        if (!prefix) return "reset";
+        return history.size() == previousMoves ? "current" : "incremental";
     }
 
     static void validateHistory(BoardState board, List<Move> history) throws IOException {
@@ -135,14 +177,46 @@ public final class KataGoOpponent implements GoOpponent {
     private static String color(Stone stone) { return stone == Stone.BLACK ? "B" : "W"; }
     @Override public String displayName() { return difficulty.opponentName(); }
 
-    private void discardSession() {
+    private Map<String, Object> diagnosticFields(BoardState board, List<Move> history) {
+        Map<String, Object> fields = new LinkedHashMap<>();
+        if (!gameId.isBlank()) fields.put("gameId", gameId);
+        if (!engineSessionId.isBlank()) fields.put("engineSessionId", engineSessionId);
+        fields.put("engine", "KataGo");
+        fields.put("difficulty", difficulty.toString());
+        fields.put("maxVisits", difficulty.visits());
+        fields.put("maxTimeMs", Math.round(difficulty.seconds() * 1000));
+        fields.put("temperature", difficulty.temperature());
+        fields.put("boardSize", board.size());
+        fields.put("komi", board.komi());
+        fields.put("moveNumber", board.moveNumber() + 1);
+        fields.put("playerColor", board.turn().name());
+        fields.put("historyMoves", history.size());
+        return fields;
+    }
+
+    private static long elapsedMs(long started) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+    }
+
+    private void discardSession(String status) {
         GtpSession active = session;
         session = null;
-        if (active != null) active.close();
+        if (active != null) {
+            active.close();
+            Map<String, Object> fields = new LinkedHashMap<>();
+            if (!gameId.isBlank()) fields.put("gameId", gameId);
+            if (!engineSessionId.isBlank()) fields.put("engineSessionId", engineSessionId);
+            fields.put("engine", "KataGo");
+            fields.put("difficulty", difficulty.toString());
+            fields.put("historyMoves", synchronizedHistory.size());
+            fields.put("status", status);
+            AppLogs.event("engine", "ranked_engine_stopped", fields);
+        }
+        engineSessionId = "";
     }
 
     @Override public void close() {
         closed = true;
-        discardSession();
+        discardSession("closed");
     }
 }

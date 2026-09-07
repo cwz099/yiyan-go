@@ -97,7 +97,7 @@ Windows 用户数据保存在 `%LOCALAPPDATA%\Yiyan`，与程序安装目录分�
 ```text
 settings.xml             对局偏好，不含 API Key
 games/                   对局快照、逐手事件和备份
-logs/                    脱敏运行与网络日志
+logs/                    脱敏对局、KataGo 引擎与网络日志
 ```
 
 日志不记录 API Key、Authorization、完整请求或响应正文。需要独立的数据目录时，可在启动参数中设置 `-Dyiyan.dataDir=目录`。
@@ -162,6 +162,6 @@ yiyan-go/
 .\mvnw.cmd --no-transfer-progress package
 ```
 
-依赖已下载时可以加 `--offline`。最近一次 Windows 本地验证：**115 项测试通过，0 失败、0 错误**；覆盖规则、有限纠错、网络超时与取消、记录保存、段位配置、持续 GTP 对局和界面流程。部分 Swing 测试需要图形环境。
+依赖已下载时可以加 `--offline`。最近一次 Windows 本地验证：**116 项测试通过，0 失败、0 错误**；覆盖规则、有限纠错、网络超时与取消、记录保存、段位配置、脱敏日志、持续 GTP 对局和界面流程。部分 Swing 测试需要图形环境。
 
 目前使用基础中国面积规则和简单劫，并未实现完整的赛事裁判规则。跨平台 JAR 和 Android 版本尚未完成独立验收；内置引擎安装与 EXE 打包脚本面向 Windows x64。

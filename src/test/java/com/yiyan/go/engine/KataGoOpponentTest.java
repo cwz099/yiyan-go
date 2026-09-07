@@ -5,10 +5,14 @@ import com.yiyan.go.game.BoardState;
 import com.yiyan.go.game.GoDifficulty;
 import com.yiyan.go.game.Move;
 import com.yiyan.go.game.Point;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +20,21 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class KataGoOpponentTest {
+    @TempDir Path directory;
+    private String previousData;
+
+    @BeforeEach
+    void isolateLogs() {
+        previousData = System.getProperty("yiyan.dataDir");
+        System.setProperty("yiyan.dataDir", directory.toString());
+    }
+
+    @AfterEach
+    void restoreLogs() {
+        if (previousData == null) System.clearProperty("yiyan.dataDir");
+        else System.setProperty("yiyan.dataDir", previousData);
+    }
+
     private ProcessBuilder fake() {
         return new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java.exe").toString(),
                 "-cp", Path.of("target/test-classes").toAbsolutePath().toString(), FakeOpponentGtp.class.getName());
@@ -27,7 +46,7 @@ class KataGoOpponentTest {
         List<Move> history = new ArrayList<>();
         history.add(board.play(0, 0).move());
 
-        try (KataGoOpponent opponent = new KataGoOpponent(GoDifficulty.FIVE, this::fake)) {
+        try (KataGoOpponent opponent = new KataGoOpponent(GoDifficulty.FIVE, this::fake, "test-game")) {
             AiDecision first = opponent.chooseMove(board, history);
             assertEquals(new Point(3, 5), first.point()); // D4
             assertFalse(first.motivation().isBlank());
@@ -38,6 +57,11 @@ class KataGoOpponentTest {
             assertEquals(new Point(4, 4), second.point()); // E5; emitted only by the same process
             assertEquals("KataGo · 五段", opponent.displayName());
         }
+        String log = Files.readString(directory.resolve("logs/application.jsonl"));
+        assertTrue(log.contains("\"event\":\"ranked_engine_started\""));
+        assertTrue(log.contains("\"event\":\"ranked_move_completed\""));
+        assertTrue(log.contains("\"syncMode\":\"incremental\""));
+        assertTrue(log.contains("\"gameId\":\"test-game\""));
     }
 
     @Test

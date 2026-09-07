@@ -25,7 +25,8 @@ public final class AppLogs {
             "result", "count", "pathType", "version", "selectedColor", "captured", "undoCount", "enabled",
             "winner", "margin", "operation", "fileCount", "recordCount", "blackCaptures", "whiteCaptures",
             "decisionId", "attempt", "attempts", "maxAttempts", "willRetry", "validationReason", "intent",
-            "engine", "gtpScore", "deadStones", "consistent");
+            "engine", "gtpScore", "deadStones", "consistent", "difficulty", "maxVisits", "maxTimeMs",
+            "temperature", "historyMoves", "syncMode", "engineSessionId", "opponentMode");
     private static final Set<String> SECRETS = ConcurrentHashMap.newKeySet();
     private static final String SESSION = UUID.randomUUID().toString();
     private static volatile String failure = "";
@@ -93,6 +94,10 @@ public final class AppLogs {
     public static String errorCode(Throwable error) {
         Throwable cause = unwrap(error);
         if (cause instanceof DiagnosticException diagnostic) return diagnostic.code();
+        if (cause instanceof com.yiyan.go.engine.EngineException) {
+            return cause.getMessage() != null && cause.getMessage().contains("超时")
+                    ? "engine_timeout" : "engine_failure";
+        }
         if (cause instanceof HttpTimeoutException || cause instanceof TimeoutException) return "timeout";
         if (cause instanceof InterruptedException || cause instanceof CancellationException) return "cancelled";
         if (cause instanceof java.net.ConnectException) return "connection_failed";
@@ -113,6 +118,9 @@ public final class AppLogs {
 
     public static String safeError(Throwable error) {
         String code = errorCode(error);
+        if (code.equals("engine_failure") && unwrap(error) instanceof com.yiyan.go.engine.EngineException engine) {
+            return limited(redact(engine.getMessage()));
+        }
         if (code.equals("unsafe_move") && unwrap(error) instanceof DiagnosticException diagnostic
                 && !diagnostic.reason().isBlank()) {
             return limited(redact(diagnostic.reason()));
@@ -126,6 +134,7 @@ public final class AppLogs {
         }
         return switch (code) {
             case "timeout" -> "API 请求超时";
+            case "engine_timeout" -> "KataGo 计算超时，请重试";
             case "cancelled" -> "请求已取消";
             case "invalid_json" -> "API 返回的数据格式无效";
             case "invalid_move" -> "AI 返回了不合法的落点";
