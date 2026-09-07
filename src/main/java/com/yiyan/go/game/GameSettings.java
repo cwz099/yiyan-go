@@ -11,8 +11,14 @@ import java.util.Properties;
 
 /** Preferences for new games. API credentials are deliberately stored elsewhere. */
 public record GameSettings(int boardSize, double komi, Stone humanColor,
-                           boolean allowUndo, boolean autoFallback) {
+                           boolean allowUndo, boolean autoFallback,
+                           boolean rankedMode, GoDifficulty difficulty) {
+    public GameSettings(int boardSize, double komi, Stone humanColor, boolean allowUndo, boolean autoFallback) {
+        this(boardSize, komi, humanColor, allowUndo, autoFallback, false, GoDifficulty.THREE);
+    }
+
     public GameSettings {
+        if (difficulty == null) throw new IllegalArgumentException("请选择对局难度");
         if (boardSize != 9 && boardSize != 13 && boardSize != 19) {
             throw new IllegalArgumentException("请选择 9、13 或 19 路棋盘");
         }
@@ -39,7 +45,9 @@ public record GameSettings(int boardSize, double komi, Stone humanColor,
                     Double.parseDouble(properties.getProperty("komi", "7.5")),
                     Stone.valueOf(properties.getProperty("humanColor", "BLACK")),
                     parseBoolean(properties.getProperty("allowUndo", "true")),
-                    parseBoolean(properties.getProperty("autoFallback", "true")));
+                    parseBoolean(properties.getProperty("autoFallback", "true")),
+                    parseBoolean(properties.getProperty("rankedMode", "false")),
+                    GoDifficulty.valueOf(properties.getProperty("difficulty", "THREE")));
         } catch (IOException | IllegalArgumentException | SecurityException exception) {
             return defaults();
         }
@@ -57,6 +65,8 @@ public record GameSettings(int boardSize, double komi, Stone humanColor,
             properties.setProperty("humanColor", humanColor.name());
             properties.setProperty("allowUndo", Boolean.toString(allowUndo));
             properties.setProperty("autoFallback", Boolean.toString(autoFallback));
+            properties.setProperty("rankedMode", Boolean.toString(rankedMode));
+            properties.setProperty("difficulty", difficulty.name());
             try (OutputStream output = Files.newOutputStream(temporary)) {
                 properties.storeToXML(output, "弈言 · 对局设置", "UTF-8");
             }

@@ -1,6 +1,7 @@
 package com.yiyan.go.ui;
 
 import com.yiyan.go.game.GameSettings;
+import com.yiyan.go.game.GoDifficulty;
 import com.yiyan.go.game.Stone;
 
 import javax.swing.BorderFactory;
@@ -60,6 +61,14 @@ public final class GameSettingsDialog {
         size.setSelectedIndex(current.boardSize() == 9 ? 0 : current.boardSize() == 13 ? 1 : 2);
         JComboBox<String> color = new JComboBox<>(new String[]{"执黑 · 你先行", "执白 · 对手先行"});
         color.setSelectedIndex(current.humanColor() == Stone.BLACK ? 0 : 1);
+        JComboBox<String> mode = new JComboBox<>(new String[]{"KataGo · 段位对弈", "DeepSeek / 本地陪练"});
+        mode.setSelectedIndex(current.rankedMode() ? 0 : 1);
+        JComboBox<GoDifficulty> difficulty = new JComboBox<>(GoDifficulty.values());
+        difficulty.setSelectedItem(current.difficulty());
+        mode.setFont(Theme.body(13));
+        difficulty.setFont(Theme.body(13));
+        mode.setBackground(Theme.SURFACE);
+        difficulty.setBackground(Theme.SURFACE);
         JSpinner komi = new JSpinner(new SpinnerNumberModel(current.komi(), 0.0, 30.0, 0.5));
         komi.setEditor(new JSpinner.NumberEditor(komi, "0.#"));
         size.setFont(Theme.body(13));
@@ -67,6 +76,16 @@ public final class GameSettingsDialog {
         komi.setFont(Theme.body(13));
         size.setBackground(Theme.SURFACE);
         color.setBackground(Theme.SURFACE);
+        form.add(row("对弈方式", mode));
+        form.add(Box.createVerticalStrut(14));
+        form.add(row("对手难度", difficulty));
+        form.add(Box.createVerticalStrut(8));
+        JLabel difficultyHint = new JLabel("段位为本应用难度分档，并非正式棋力认证。");
+        difficultyHint.setFont(Theme.body(12));
+        difficultyHint.setForeground(Theme.TEXT_MUTED);
+        difficultyHint.setAlignmentX(Component.LEFT_ALIGNMENT);
+        form.add(difficultyHint);
+        form.add(Box.createVerticalStrut(18));
         form.add(row("棋盘大小", size));
         form.add(Box.createVerticalStrut(14));
         form.add(row("你的棋色", color));
@@ -75,6 +94,15 @@ public final class GameSettingsDialog {
         form.add(Box.createVerticalStrut(18));
         JCheckBox undo = checkBox("允许悔棋", current.allowUndo());
         JCheckBox fallback = checkBox("DeepSeek 请求失败时，由本地陪练接续", current.autoFallback());
+        Runnable updateMode = () -> {
+            boolean ranked = mode.getSelectedIndex() == 0;
+            difficulty.setEnabled(ranked);
+            fallback.setEnabled(!ranked);
+            difficultyHint.setText(ranked ? "段位为本应用难度分档，并非正式棋力认证。"
+                    : "难度分档用于 KataGo；DeepSeek 可在对手按钮中连接。");
+        };
+        mode.addActionListener(event -> updateMode.run());
+        updateMode.run();
         form.add(undo);
         form.add(Box.createVerticalStrut(8));
         form.add(fallback);
@@ -103,7 +131,8 @@ public final class GameSettingsDialog {
                 int selectedSize = new int[]{9, 13, 19}[size.getSelectedIndex()];
                 result[0] = new GameSettings(selectedSize, ((Number) komi.getValue()).doubleValue(),
                         color.getSelectedIndex() == 0 ? Stone.BLACK : Stone.WHITE,
-                        undo.isSelected(), fallback.isSelected());
+                        undo.isSelected(), fallback.isSelected(), mode.getSelectedIndex() == 0,
+                        (GoDifficulty) difficulty.getSelectedItem());
                 dialog.dispose();
             } catch (ParseException | IllegalArgumentException exception) {
                 JOptionPane.showMessageDialog(dialog, "贴目请输入 0 到 30 之间的整数或半目。", "再确认一下贴目", JOptionPane.WARNING_MESSAGE);

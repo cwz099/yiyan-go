@@ -17,6 +17,7 @@ import com.yiyan.go.recording.GameRecorder;
 import com.yiyan.go.engine.EngineVerdict;
 import com.yiyan.go.engine.KataGoConfig;
 import com.yiyan.go.engine.KataGoEngine;
+import com.yiyan.go.engine.KataGoOpponent;
 import com.yiyan.go.engine.ScoreEngine;
 
 import javax.swing.BorderFactory;
@@ -72,9 +73,9 @@ public final class MainFrame extends JFrame {
     private final Deque<BoardState> undoStack = new ArrayDeque<>();
     private final List<Narrative> narratives = new ArrayList<>();
     private final LocalGoOpponent localOpponent = new LocalGoOpponent();
-    private GoOpponent opponent = localOpponent;
+    private GoOpponent opponent = settings.rankedMode() ? new KataGoOpponent(settings.difficulty()) : localOpponent;
     private DeepSeekConfig deepSeekConfig;
-    private String lastAiStatus = "离线";
+    private String lastAiStatus = settings.rankedMode() ? "本地引擎就绪" : "离线";
     private String resultSummary = "";
     private FinalScore confirmedScore;
     private long humanTurnStarted = System.nanoTime();
@@ -140,6 +141,7 @@ public final class MainFrame extends JFrame {
             @Override
             public void windowClosed(WindowEvent event) {
                 invalidateAiRequest();
+                opponent.close();
                 recorder.pause(state);
                 AppLogs.event("app", "closed", Map.of("gameId", recorder.id()));
             }
@@ -406,12 +408,14 @@ public final class MainFrame extends JFrame {
     private void startAiTurn(boolean fallback) {
         if (aiThinking || state.gameOver() || state.turn() == settings.humanColor()) return;
         aiThinking = true;
-        lastAiStatus = fallback ? "本地接续中" : opponent == localOpponent ? "本地计算中" : "请求中 · 核验与有限纠错";
+        lastAiStatus = fallback ? "本地接续中" : opponent instanceof KataGoOpponent ? "正在计算 · " + settings.difficulty()
+                : opponent == localOpponent ? "本地计算中" : "请求中 · 核验与有限纠错";
         refreshAll();
         rebuildMessages();
 
         final long expectedRevision = revision;
         final BoardState requestedPosition = state.copy();
+        final List<Move> requestedHistory = recorder.moveHistory();
         final GoOpponent turnOpponent = fallback ? localOpponent : opponent;
         final long started = System.nanoTime();
         AppLogs.event("game", "ai_turn_started", Map.of("gameId", recorder.id(),
@@ -419,7 +423,7 @@ public final class MainFrame extends JFrame {
         aiWorker = new SwingWorker<>() {
             @Override
             protected AiDecision doInBackground() throws Exception {
-                return turnOpponent.chooseMove(requestedPosition);
+                return turnOpponent.chooseMove(requestedPosition, requestedHistory);
             }
 
             @Override
@@ -459,7 +463,8 @@ public final class MainFrame extends JFrame {
         String source = fallback && opponent != localOpponent ? "本地接续"
                 : opponent == localOpponent ? "本地陪练" : opponent.displayName();
         if (!fallback && opponent != localOpponent && decision.attempts() > 1) source += " · 第 " + decision.attempts() + " 次请求成功";
-        lastAiStatus = fallback ? "本手本地接续" : opponent == localOpponent ? "离线" : "最近请求成功";
+        lastAiStatus = fallback ? "本手本地接续" : opponent instanceof KataGoOpponent ? "本地计算完成"
+                : opponent == localOpponent ? "离线" : "最近请求成功";
         String explanation = AppLogs.redact(decision.motivation());
         recorder.record(state, result, source, explanation, elapsedMs);
         humanTurnStarted = System.nanoTime();
@@ -482,7 +487,7 @@ public final class MainFrame extends JFrame {
         AppLogs.event("game", "ai_turn_failed", Map.of("gameId", recorder.id(),
                 "moveNumber", state.moveNumber() + 1, "reason", reason,
                 "errorClass", error.getClass().getSimpleName()));
-        if (!fallback && opponent != localOpponent && settings.autoFallback()) {
+        if (!fallback && opponent != localOpponent && !(opponent instanceof KataGoOpponent) && settings.autoFallback()) {
             narratives.add(new Narrative(state.moveNumber(), MessageKind.WARNING,
                     "本手改由本地接续", reason + "。本手由本地陪练完成；下一回合仍会尝试 DeepSeek。"));
             recorder.event("fallback", "DeepSeek → 本地陪练：" + reason, state);
@@ -535,15 +540,20 @@ public final class MainFrame extends JFrame {
 
     private void beginNewGame() {
         invalidateAiRequest();
+        opponent.close();
         recorder.pause(state);
         state = new BoardState(settings.boardSize(), settings.komi());
         resultSummary = "";
         confirmedScore = null;
         undoStack.clear();
         humanTurnStarted = System.nanoTime();
-        recorder = GameRecorder.start(state, settings.humanColor(), opponent.displayName());
-        if (deepSeekConfig != null) opponent = new DeepSeekOpponent(deepSeekConfig, recorder.id());
-        lastAiStatus = opponent == localOpponent ? "离线" : "待请求";
+        String providerName = settings.rankedMode() ? settings.difficulty().opponentName()
+                : deepSeekConfig == null ? localOpponent.displayName() : "DeepSeek · " + AppLogs.redact(deepSeekConfig.model());
+        recorder = GameRecorder.start(state, settings.humanColor(), providerName);
+        opponent = settings.rankedMode() ? new KataGoOpponent(settings.difficulty())
+                : deepSeekConfig == null ? localOpponent : new DeepSeekOpponent(deepSeekConfig, recorder.id());
+        lastAiStatus = opponent instanceof KataGoOpponent ? "本地引擎就绪"
+                : opponent == localOpponent ? "离线" : "待请求";
         resetNarratives();
         showHint("新棋局已经摆好。你执" + settings.humanColor().chineseName() + "。", Theme.SUCCESS);
         refreshAll();
@@ -555,13 +565,17 @@ public final class MainFrame extends JFrame {
         if (selected == null || !confirmNewGame()) return;
         invalidateAiRequest();
         settings = selected;
+        saveSettings();
+        beginNewGame();
+    }
+
+    private void saveSettings() {
         try {
             settings.save(AppPaths.dataDirectory().resolve("settings.xml"));
         } catch (IOException exception) {
             JOptionPane.showMessageDialog(this, "设置已在本次运行生效，但无法写入磁盘。请检查数据目录权限。",
                     "设置没有保存", JOptionPane.WARNING_MESSAGE);
         }
-        beginNewGame();
     }
 
     private void resign() {
@@ -737,6 +751,8 @@ public final class MainFrame extends JFrame {
             deepSeekConfig = DeepSeekConfig.of(key,
                     endpoint == null || endpoint.isBlank() ? DeepSeekConfig.DEFAULT_ENDPOINT : endpoint,
                     model == null || model.isBlank() ? DeepSeekConfig.DEFAULT_MODEL : model);
+            if (settings.rankedMode()) return;
+            opponent.close();
             opponent = new DeepSeekOpponent(deepSeekConfig, recorder.id());
             lastAiStatus = "已读取环境配置 · 待请求";
             recorder.opponentChanged(opponent.displayName(), state);
@@ -747,7 +763,7 @@ public final class MainFrame extends JFrame {
             rebuildMessages();
         } catch (RuntimeException exception) {
             deepSeekConfig = null;
-            opponent = localOpponent;
+            if (!settings.rankedMode()) opponent = localOpponent;
             narratives.add(new Narrative(0, MessageKind.WARNING, "环境配置未启用", "请在对手设置中检查 API 地址和模型。"));
             refreshAll();
             rebuildMessages();
@@ -759,8 +775,28 @@ public final class MainFrame extends JFrame {
             showHint("这一手结束后再更换对手，避免打断当前计算。", Theme.WARNING);
             return;
         }
+        if (settings.rankedMode()) {
+            Object[] actions = {"调整段位", "连接 DeepSeek", "本地陪练", "先不改"};
+            int action = JOptionPane.showOptionDialog(this, "当前对手：" + opponent.displayName(), "选择对手",
+                    JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, actions, actions[0]);
+            if (action == 0) { showGameSettings(); return; }
+            if (action == 2) { applyConnection(ConnectionDialog.Result.local()); return; }
+            if (action != 1) return;
+        }
         ConnectionDialog.Result result = ConnectionDialog.showDialog(this);
         if (!result.confirmed()) return;
+        applyConnection(result);
+    }
+
+    private void applyConnection(ConnectionDialog.Result result) {
+        if (!result.confirmed()) return;
+        invalidateAiRequest();
+        opponent.close();
+        if (settings.rankedMode()) {
+            settings = new GameSettings(settings.boardSize(), settings.komi(), settings.humanColor(),
+                    settings.allowUndo(), settings.autoFallback(), false, settings.difficulty());
+            saveSettings();
+        }
         if (result.config() == null) {
             deepSeekConfig = null;
             opponent = localOpponent;
@@ -820,7 +856,8 @@ public final class MainFrame extends JFrame {
         providerButton.setText(providerName.length() > 25 ? providerName.substring(0, 24) + "…" : providerName);
         providerButton.setToolTipText(providerName + " · " + lastAiStatus);
         providerButton.setPreferredSize(new Dimension(230, 38));
-        navProviderButton.setText(opponent == localOpponent ? "本地陪练 · 离线" : "DeepSeek · " + lastAiStatus);
+        navProviderButton.setText(opponent instanceof KataGoOpponent ? opponent.displayName()
+                : opponent == localOpponent ? "本地陪练 · 离线" : "DeepSeek · " + lastAiStatus);
         navProviderButton.setToolTipText(providerName + " · " + lastAiStatus);
         providerButton.setEnabled(!aiThinking);
         navProviderButton.setEnabled(!aiThinking);
@@ -852,7 +889,8 @@ public final class MainFrame extends JFrame {
         narratives.clear();
         String name = opponent.displayName();
         narratives.add(new Narrative(0, MessageKind.WELCOME, "开始这盘棋",
-                "你执" + settings.humanColor().chineseName() + "。黑棋先行，慢慢想。"));
+                "你执" + settings.humanColor().chineseName() + "。黑棋先行，慢慢想。"
+                        + (opponent instanceof KataGoOpponent ? "\n本局对手：" + name + "。" : "")));
         rebuildMessages();
     }
 
@@ -927,7 +965,7 @@ public final class MainFrame extends JFrame {
         pulse.setFont(Theme.bodyMedium(12));
         pulse.setForeground(Theme.ACCENT);
         JLabel copy = new JLabel(opponent == localOpponent || lastAiStatus.equals("本地接续中") ? "我在核对几种走法…"
-                : "DeepSeek 正在想这一手…");
+                : opponent instanceof KataGoOpponent ? "KataGo 正在想这一手…" : "DeepSeek 正在想这一手…");
         copy.setFont(Theme.body(12));
         copy.setForeground(Theme.TEXT_SECONDARY);
         bubble.add(pulse, BorderLayout.WEST);

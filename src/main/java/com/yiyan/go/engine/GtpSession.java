@@ -5,12 +5,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.*;
 
-/** One private process per adjudication. No shell, bounded output and deadline, cancellable reads. */
+/** Private engine process. No shell, bounded output and deadline, cancellable reads. */
 final class GtpSession implements AutoCloseable {
     private final Process process;
     private final BufferedWriter input;
     private final BlockingQueue<String> lines = new ArrayBlockingQueue<>(2048);
-    private final long deadline;
+    private long deadline;
     private volatile boolean ended;
     private volatile String readError;
     private int nextId;
@@ -66,10 +66,15 @@ final class GtpSession implements AutoCloseable {
         return body.toString();
     }
 
+    /** Called by the owning worker before another turn on a persistent engine. */
+    void resetBudget(Duration budget) {
+        deadline = System.nanoTime() + budget.toNanos();
+    }
+
     private String nextLine() throws IOException, InterruptedException {
         for (;;) {
             long remaining = deadline - System.nanoTime();
-            if (remaining <= 0) throw new EngineException("KataGo 判定超时，请重试");
+            if (remaining <= 0) throw new EngineException("KataGo 计算超时，请重试");
             String line = lines.poll(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100)), TimeUnit.NANOSECONDS);
             if (line != null) return line;
             if (ended) throw new EngineException(readError != null ? readError : "KataGo 已退出");

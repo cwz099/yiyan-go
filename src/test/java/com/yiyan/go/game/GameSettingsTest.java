@@ -30,6 +30,17 @@ class GameSettingsTest {
     }
 
     @Test
+    void rankedModeAndDifficultyRoundTrip() throws IOException {
+        Path file = directory.resolve("ranked.xml");
+        GameSettings settings = new GameSettings(19, 7.5, Stone.BLACK,
+                true, false, true, GoDifficulty.NINE);
+        settings.save(file);
+        assertEquals(settings, GameSettings.load(file));
+        assertTrue(GameSettings.load(file).rankedMode());
+        assertEquals(GoDifficulty.NINE, GameSettings.load(file).difficulty());
+    }
+
+    @Test
     void missingAndCorruptSettingsFallBackSafely() throws IOException {
         assertEquals(GameSettings.defaults(), GameSettings.load(null));
         assertEquals(GameSettings.defaults(), GameSettings.load(directory.resolve("missing.xml")));
@@ -64,6 +75,8 @@ class GameSettingsTest {
         assertThrows(IllegalArgumentException.class, () -> new GameSettings(19, Double.NaN, Stone.BLACK, true, true));
         assertThrows(IllegalArgumentException.class, () -> new GameSettings(19, 7.5, Stone.EMPTY, true, true));
         assertThrows(IllegalArgumentException.class, () -> new GameSettings(19, 7.5, null, true, true));
+        assertThrows(IllegalArgumentException.class,
+                () -> new GameSettings(19, 7.5, Stone.BLACK, true, true, true, null));
         assertDoesNotThrow(() -> new GameSettings(13, 30, Stone.WHITE, false, false));
     }
 

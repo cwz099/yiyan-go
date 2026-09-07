@@ -3,6 +3,7 @@ package com.yiyan.go.ui;
 import com.yiyan.go.diagnostics.AppLogs;
 import com.yiyan.go.game.BoardState;
 import com.yiyan.go.game.GameSettings;
+import com.yiyan.go.game.GoDifficulty;
 import com.yiyan.go.game.Stone;
 import com.yiyan.go.recording.GameRecorder;
 
@@ -22,7 +23,8 @@ public final class FeatureUiSnapshot {
         Files.createDirectories(output);
         Path data = output.resolve("test-data");
         System.setProperty("yiyan.dataDir", data.toString());
-        GameSettings settings = new GameSettings(13, 7.5, Stone.BLACK, true, true);
+        GameSettings settings = new GameSettings(13, 7.5, Stone.BLACK,
+                true, true, true, GoDifficulty.SIX);
         settings.save(data.resolve("settings.xml"));
         SwingUtilities.invokeAndWait(() -> {
             Theme.installDefaults();
