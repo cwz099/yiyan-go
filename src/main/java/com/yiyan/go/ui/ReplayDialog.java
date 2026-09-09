@@ -1,6 +1,11 @@
 package com.yiyan.go.ui;
 
+import com.yiyan.go.analysis.GameReview;
+import com.yiyan.go.analysis.KataGoGameAnalyzer;
+import com.yiyan.go.analysis.QuickGameReview;
 import com.yiyan.go.diagnostics.AppLogs;
+import com.yiyan.go.engine.EngineException;
+import com.yiyan.go.engine.KataGoConfig;
 import com.yiyan.go.game.BoardState;
 import com.yiyan.go.recording.GameArchive;
 import com.yiyan.go.recording.GameRecord;
@@ -12,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
 import java.util.Map;
 
 /** An independent, read-only board; navigating history never changes the live game. */
@@ -23,8 +29,11 @@ public final class ReplayDialog extends JDialog {
     private final JLabel heading = new JLabel("把这一盘，再慢慢看一遍");
     private final JLabel summary = new JLabel("选择左侧对局，回看每一步。");
     private final JLabel status = new JLabel("正在读取对局…");
+    private final JLabel analysisStatus = new JLabel("选择棋局后可开始分析");
     private final JLabel step = new JLabel("初始局面", SwingConstants.CENTER);
     private final JTextArea explanation = new JTextArea();
+    private final JTextArea wholeGame = new JTextArea();
+    private final JTabbedPane notesTabs = new JTabbedPane();
     private final JSlider slider = new JSlider(0, 0, 0);
     private final SoftButton first = new SoftButton("初始", SoftButton.Style.SECONDARY);
     private final SoftButton previous = new SoftButton("上一手", SoftButton.Style.SECONDARY);
@@ -32,10 +41,14 @@ public final class ReplayDialog extends JDialog {
     private final SoftButton last = new SoftButton("最后", SoftButton.Style.SECONDARY);
     private final SoftButton export = new SoftButton("导出 SGF", SoftButton.Style.PRIMARY);
     private final SoftButton refresh = new SoftButton("刷新记录", SoftButton.Style.GHOST);
+    private final SoftButton analyze = new SoftButton("KataGo 分析整盘", SoftButton.Style.PRIMARY);
     private BoardState replayState = new BoardState();
     private GameRecord selected;
+    private GameReview activeReview;
+    private final Map<String, GameReview> reviewCache = new HashMap<>();
     private final BoardPanel board = new BoardPanel(() -> replayState, () -> false, (x, y) -> { });
     private SwingWorker<GameArchive.ScanResult, Void> loader;
+    private SwingWorker<GameReview, Void> analysisWorker;
 
     private ReplayDialog(JFrame owner) {
         super(owner, "复盘与对局记录 · 弈言", true);
@@ -88,9 +101,39 @@ public final class ReplayDialog extends JDialog {
         explanation.setMargin(new Insets(12, 10, 12, 10));
         explanation.getAccessibleContext().setAccessibleName("当前手说明与结果");
         JScrollPane notes = new JScrollPane(explanation);
-        notes.setPreferredSize(new Dimension(255, 450));
-        notes.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, Theme.BORDER_SOFT));
-        paper.add(notes, BorderLayout.EAST);
+        notes.setBorder(BorderFactory.createEmptyBorder());
+
+        wholeGame.setEditable(false);
+        wholeGame.setLineWrap(true);
+        wholeGame.setWrapStyleWord(true);
+        wholeGame.setFont(Theme.body(13));
+        wholeGame.setForeground(Theme.TEXT);
+        wholeGame.setBackground(Theme.SURFACE);
+        wholeGame.setMargin(new Insets(12, 10, 12, 10));
+        wholeGame.getAccessibleContext().setAccessibleName("整盘棋分析与训练建议");
+        JScrollPane reviewScroll = new JScrollPane(wholeGame);
+        reviewScroll.setBorder(BorderFactory.createEmptyBorder());
+        JPanel review = new JPanel(new BorderLayout(0, 9));
+        review.setBackground(Theme.SURFACE);
+        JPanel reviewTools = new JPanel(new BorderLayout(8, 5));
+        reviewTools.setBackground(Theme.SURFACE);
+        analyze.addActionListener(event -> analyzeWholeGame());
+        reviewTools.add(analyze, BorderLayout.NORTH);
+        analysisStatus.setFont(Theme.body(10));
+        analysisStatus.setForeground(Theme.TEXT_MUTED);
+        analysisStatus.setBorder(BorderFactory.createEmptyBorder(0, 4, 0, 2));
+        reviewTools.add(analysisStatus, BorderLayout.SOUTH);
+        review.add(reviewTools, BorderLayout.NORTH);
+        review.add(reviewScroll, BorderLayout.CENTER);
+
+        notesTabs.addTab("当前手", notes);
+        notesTabs.addTab("整盘分析", review);
+        notesTabs.setSelectedIndex(1);
+        notesTabs.setPreferredSize(new Dimension(350, 450));
+        notesTabs.setFont(Theme.bodyMedium(12));
+        notesTabs.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, Theme.BORDER_SOFT));
+        notesTabs.getAccessibleContext().setAccessibleName("复盘说明");
+        paper.add(notesTabs, BorderLayout.EAST);
         workspace.add(paper, BorderLayout.CENTER);
 
         JPanel timeline = new JPanel(new BorderLayout(0, 10));
@@ -175,11 +218,20 @@ public final class ReplayDialog extends JDialog {
     }
 
     private void selectGame(GameRecord game) {
+        cancelAnalysis("selection_changed");
         selected = game;
+        activeReview = game == null ? null : reviewCache.get(game.id());
         slider.setMaximum(game == null ? 0 : game.moves().size());
         slider.setValue(slider.getMaximum());
         slider.setEnabled(game != null && !game.moves().isEmpty());
         export.setEnabled(game != null);
+        analyze.setEnabled(game != null && !game.moves().isEmpty());
+        analyze.setText(activeReview == null ? "KataGo 分析整盘" : "重新分析");
+        analysisStatus.setText(game == null ? "选择棋局后可开始分析"
+                : activeReview == null ? "尚未运行引擎分析" : "本次窗口内已完成分析");
+        wholeGame.setText(game == null ? QuickGameReview.format(null)
+                : activeReview == null ? QuickGameReview.format(game) : activeReview.formatted());
+        wholeGame.setCaretPosition(0);
         renderPosition();
     }
 
@@ -215,10 +267,82 @@ public final class ReplayDialog extends JDialog {
                 board.setScoreMarks(selected.finalScore().deadStones(), selected.finalScore().neutralPoints());
                 detail += "\n\n红叉：已确认死子；灰框：中立区域标记。原始棋盘保留，计算时移除死子。";
             }
+            if (ply > 0 && activeReview != null) {
+                String engineDetail = activeReview.detailForMove(ply);
+                if (!engineDetail.isBlank()) detail += "\n\n—— KataGo 对本手的判断 ——\n" + engineDetail;
+            }
             explanation.setText(AppLogs.redact(detail));
             explanation.setCaretPosition(0);
         }
         board.repaint();
+    }
+
+    private void analyzeWholeGame() {
+        if (selected == null || selected.moves().isEmpty()) return;
+        cancelAnalysis("restarted");
+        GameRecord game = selected;
+        notesTabs.setSelectedIndex(1);
+        analyze.setEnabled(false);
+        analyze.setText("正在分析…");
+        analysisStatus.setText("KataGo 正在逐手检查整盘棋，请稍候…");
+        wholeGame.setText(QuickGameReview.format(game) + "\n\n正在计算胜负走势和关键转折…");
+        wholeGame.setCaretPosition(0);
+        AppLogs.event("review", "analysis_started", Map.of("gameId", game.id(),
+                "count", game.moves().size(), "boardSize", game.size()));
+        analysisWorker = new SwingWorker<>() {
+            @Override protected GameReview doInBackground() throws Exception {
+                try {
+                    return new KataGoGameAnalyzer(KataGoConfig.discover()).analyze(game);
+                } catch (java.io.IOException exception) {
+                    if (exception instanceof EngineException) throw exception;
+                    throw new EngineException("未找到完整的 KataGo 引擎，无法进行整盘分析", exception);
+                }
+            }
+
+            @Override protected void done() {
+                if (analysisWorker == this) analysisWorker = null;
+                if (isCancelled() || selected == null || !selected.id().equals(game.id())) return;
+                analyze.setEnabled(true);
+                try {
+                    GameReview result = get();
+                    activeReview = result;
+                    reviewCache.put(game.id(), result);
+                    wholeGame.setText(AppLogs.redact(result.formatted()));
+                    wholeGame.setCaretPosition(0);
+                    analysisStatus.setText("分析完成 · 可在“当前手”中逐手查看");
+                    analyze.setText("重新分析");
+                    renderPosition();
+                    AppLogs.event("review", "analysis_completed", Map.of("gameId", game.id(),
+                            "count", game.moves().size(), "durationMs", result.elapsedMs(),
+                            "maxVisits", result.visitsPerPosition(),
+                            "humanMistakes", result.humanMistakes().size(),
+                            "opportunities", result.opportunities().size()));
+                } catch (java.util.concurrent.CancellationException ignored) {
+                    analyze.setText("KataGo 分析整盘");
+                } catch (Exception exception) {
+                    Throwable cause = AppLogs.unwrap(exception);
+                    String message = AppLogs.safeError(cause);
+                    analysisStatus.setText("分析未完成：" + message);
+                    analyze.setText("重新分析");
+                    wholeGame.setText(QuickGameReview.format(game) + "\n\n分析未完成：" + message
+                            + "\n可检查 KataGo 文件后重试；棋谱和基础概览仍可正常使用。");
+                    wholeGame.setCaretPosition(0);
+                    AppLogs.event("review", "analysis_failed", Map.of("gameId", game.id(),
+                            "count", game.moves().size(), "errorCode", AppLogs.errorCode(cause),
+                            "errorClass", cause.getClass().getSimpleName()));
+                }
+            }
+        };
+        analysisWorker.execute();
+    }
+
+    private void cancelAnalysis(String reason) {
+        SwingWorker<GameReview, Void> worker = analysisWorker;
+        if (worker == null || worker.isDone()) return;
+        worker.cancel(true);
+        analysisWorker = null;
+        AppLogs.event("review", "analysis_cancelled", Map.of(
+                "gameId", selected == null ? "" : selected.id(), "reason", reason));
     }
 
     private void exportSgf() {
@@ -247,6 +371,7 @@ public final class ReplayDialog extends JDialog {
 
     @Override public void dispose() {
         if (loader != null) loader.cancel(true);
+        cancelAnalysis("dialog_closed");
         super.dispose();
     }
 }

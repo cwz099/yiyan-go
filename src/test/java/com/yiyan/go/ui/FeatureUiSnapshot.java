@@ -47,7 +47,7 @@ public final class FeatureUiSnapshot {
                 AppLogs.event("network", "visual_test_only", Map.of("source", "mock", "httpStatus", 200,
                         "durationMs", 120, "action", "PLAY", "gameId", recorder.id()));
                 captureDialog(output.resolve("settings.png"), () -> GameSettingsDialog.showDialog(owner, settings));
-                captureDialog(output.resolve("replay.png"), () -> ReplayDialog.showDialog(owner));
+                captureDialog(output.resolve("replay.png"), () -> ReplayDialog.showDialog(owner), "整盘分析");
                 captureDialog(output.resolve("logs.png"), () -> LogsDialog.showDialog(owner));
                 board.pass();
                 board.pass();
@@ -62,11 +62,18 @@ public final class FeatureUiSnapshot {
     }
 
     private static void captureDialog(Path target, Runnable open) throws Exception {
+        captureDialog(target, open, null);
+    }
+
+    private static void captureDialog(Path target, Runnable open, String tabTitle) throws Exception {
         AtomicReference<Exception> failure = new AtomicReference<>();
         Timer timer = new Timer(1200, event -> {
             for (Window window : Window.getWindows()) {
                 if (window instanceof JDialog dialog && dialog.isShowing()) {
-                    try { capture(dialog.getContentPane(), target); }
+                    try {
+                        if (tabTitle != null) selectTab(dialog, tabTitle);
+                        capture(dialog.getContentPane(), target);
+                    }
                     catch (Exception exception) { failure.set(exception); }
                     dialog.dispose();
                     break;
@@ -78,6 +85,18 @@ public final class FeatureUiSnapshot {
         try { open.run(); } finally { timer.stop(); }
         if (failure.get() != null) throw failure.get();
         if (!Files.exists(target)) throw new IllegalStateException("Dialog snapshot missing: " + target);
+    }
+
+    private static boolean selectTab(Container parent, String title) {
+        for (Component component : parent.getComponents()) {
+            if (component instanceof JTabbedPane tabs) {
+                for (int i = 0; i < tabs.getTabCount(); i++) {
+                    if (title.equals(tabs.getTitleAt(i))) { tabs.setSelectedIndex(i); return true; }
+                }
+            }
+            if (component instanceof Container child && selectTab(child, title)) return true;
+        }
+        return false;
     }
 
     private static void capture(Container component, Path target) throws Exception {

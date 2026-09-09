@@ -26,7 +26,8 @@ public final class AppLogs {
             "winner", "margin", "operation", "fileCount", "recordCount", "blackCaptures", "whiteCaptures",
             "decisionId", "attempt", "attempts", "maxAttempts", "willRetry", "validationReason", "intent",
             "engine", "gtpScore", "deadStones", "consistent", "difficulty", "maxVisits", "maxTimeMs",
-            "temperature", "historyMoves", "syncMode", "engineSessionId", "opponentMode");
+            "temperature", "historyMoves", "syncMode", "engineSessionId", "opponentMode",
+            "humanMistakes", "opportunities");
     private static final Set<String> SECRETS = ConcurrentHashMap.newKeySet();
     private static final String SESSION = UUID.randomUUID().toString();
     private static volatile String failure = "";

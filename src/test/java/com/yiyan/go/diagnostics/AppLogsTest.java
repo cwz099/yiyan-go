@@ -88,6 +88,25 @@ class AppLogsTest {
         }
     }
 
+    @Test void wholeGameReviewEvidenceSurvivesWithoutReportText() throws Exception {
+        String previous = System.getProperty("yiyan.dataDir");
+        try {
+            System.setProperty("yiyan.dataDir", temporary.toString());
+            AppLogs.event("review", "analysis_completed", Map.of(
+                    "gameId", "game-1", "count", 180, "durationMs", 21_000,
+                    "maxVisits", 12, "humanMistakes", 4, "opportunities", 2,
+                    "report", "不应写入日志的复盘全文"));
+            String content = Files.readString(temporary.resolve("logs/application.jsonl"));
+            assertTrue(content.contains("\"humanMistakes\":4"));
+            assertTrue(content.contains("\"opportunities\":2"));
+            assertTrue(content.contains("\"maxVisits\":12"));
+            assertFalse(content.contains("复盘全文"));
+        } finally {
+            if (previous == null) System.clearProperty("yiyan.dataDir");
+            else System.setProperty("yiyan.dataDir", previous);
+        }
+    }
+
     @Test void errorMessageNeverIncludesRemoteExceptionText() {
         assertEquals("API 请求超时", AppLogs.safeError(new java.net.http.HttpTimeoutException("private-server-text")));
         assertFalse(AppLogs.safeError(new java.io.IOException("secret-raw-response")).contains("secret"));
